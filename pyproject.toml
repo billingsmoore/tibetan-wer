@@ -9,7 +9,7 @@ dependencies=[
 ]
 
 name = "tibetan-wer"
-version = "0.0.2"
+version = "1.0.1"
 authors = [
   { name="billingsmoore", email="billingsmoore@gmail.com" },
 ]
