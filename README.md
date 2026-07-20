@@ -2,6 +2,12 @@
 
 Word Error Rate (WER) and Syllable Error Rate (SER) metrics for Tibetan ASR evaluation, with three word segmentation methods.
 
+This package is the reference implementation of Segmented Word Error Rate (SWER), introduced in:
+
+> J. Moore, S. Li and P. Lauren, "Evaluating Tibetan ASR With Segmented Word Error Rate: Beyond Character-Level Metrics," in *IEEE Access*, vol. 14, pp. 101790-101805, 2026, doi: [10.1109/ACCESS.2026.3709206](https://doi.org/10.1109/ACCESS.2026.3709206).
+
+SWER computes WER for Tibetan by first applying automatic word segmentation to both hypothesis and reference text, since Tibetan orthography marks syllable (*tsek*) boundaries but not word boundaries. Three segmentation methods are provided, each corresponding to a variant reported in the paper.
+
 ## Install
 
 ```bash
@@ -22,12 +28,12 @@ pip install "tibetan-wer[gemini]"
 
 ## Functions
 
-| Function | Segmentation method | Extra dependency |
-|---|---|---|
-| `wer` / `botok_wer` | [botok](https://github.com/Esukhia/botok) morphological tokenizer | *(none)* |
-| `ser` | tsek (་) syllable boundary | *(none)* |
-| `bert_wer` | [KoichiYasuoka/tibetan-bert-base-upos](https://huggingface.co/KoichiYasuoka/tibetan-bert-base-upos) | `tibetan-wer[bert]` |
-| `gemini_wer` | Gemini API | `tibetan-wer[gemini]` |
+| Function | SWER variant | Segmentation method | Extra dependency |
+|---|---|---|---|
+| `wer` / `botok_wer` | BoTok-SWER | [botok](https://github.com/Esukhia/botok) morphological tokenizer | *(none)* |
+| `ser` | — | tsek (་) syllable boundary | *(none)* |
+| `bert_wer` | BERT-SWER | [KoichiYasuoka/tibetan-bert-base-upos](https://huggingface.co/KoichiYasuoka/tibetan-bert-base-upos) | `tibetan-wer[bert]` |
+| `gemini_wer` | Gem-SWER | Gemini 2.5 Flash Lite | `tibetan-wer[gemini]` |
 
 All functions accept either a single string or a list of strings and return a dict with `micro_wer`/`macro_wer` (or `micro_ser`/`macro_ser`), plus `substitutions`, `insertions`, `deletions`, and `num_sentences`.
 
@@ -128,4 +134,20 @@ trainer = Seq2SeqTrainer(
 )
 
 trainer.train()
+```
+
+## Citation
+
+If you use this package, please cite:
+
+```bibtex
+@ARTICLE{moore2026tibetanasr,
+  author={Moore, Jacob and Li, Sheng and Lauren, Paula},
+  journal={IEEE Access},
+  title={Evaluating Tibetan {ASR} With Segmented Word Error Rate: Beyond Character-Level Metrics},
+  year={2026},
+  volume={14},
+  pages={101790-101805},
+  doi={10.1109/ACCESS.2026.3709206}
+}
 ```
