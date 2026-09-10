@@ -1,71 +1,145 @@
-import os
-import time
+"""Error rates for Tibetan text: CER, SER, and the three SWER variants.
+
+Every metric here is the same Levenshtein rate over a different unit: characters
+(CER), tsek-delimited syllables (SER), or words produced by one of the
+segmenters in :mod:`tibetan_wer.segmentation` (BoTok-SWER, BERT-SWER,
+Gem-SWER). Each returns micro and macro rates, corpus edit-operation totals, and
+the per-sentence scores and per-sentence edit counts behind them, which is what
+bootstrap intervals (:mod:`tibetan_wer.stats`) and error-structure analysis
+(:mod:`tibetan_wer.profile`) need.
+
+Note the argument order throughout: ``(predictions, references)``. Reversing it
+leaves substitutions unchanged but swaps insertions and deletions.
+"""
+from __future__ import annotations
+
 import numpy as np
 
-TSEK = "་"  # U+0F0B
+from .alignment import align, distance, edit_counts, resolve_backend
+from .normalization import normalize as _normalize
+from .segmentation import (
+    TSEK,
+    GEMINI_MODEL,
+    fallback_counts,
+    gemini_segment,
+    is_degenerate,
+    segment_all,
+    syllable_segment,
+    word_segment,
+)
+
+__all__ = [
+    "cer",
+    "ser",
+    "wer",
+    "botok_wer",
+    "bert_wer",
+    "gemini_wer",
+    "score_segments",
+    "edit_operations",
+    "word_segment",
+    "syllable_segment",
+]
 
 
 # ---------------------------------------------------------------------------
-# Shared edit-distance WER engine
+# Shared edit-distance engine
 # ---------------------------------------------------------------------------
 
-def _wer_from_word_lists(ref_words, hyp_words):
+def _wer_from_word_lists(ref_words, hyp_words, backend="auto"):
+    """``(S, I, D, score)`` for one pair; ``score`` is None on an empty reference."""
+    S, I, D = edit_counts(ref_words, hyp_words, backend=backend)
     r_len = len(ref_words)
-    p_len = len(hyp_words)
-
-    d = np.zeros((r_len + 1, p_len + 1), dtype=np.int32)
-    for i in range(r_len + 1):
-        d[i][0] = i
-    for j in range(p_len + 1):
-        d[0][j] = j
-    for i in range(1, r_len + 1):
-        for j in range(1, p_len + 1):
-            if ref_words[i - 1] == hyp_words[j - 1]:
-                d[i][j] = d[i - 1][j - 1]
-            else:
-                d[i][j] = min(
-                    d[i - 1][j] + 1,
-                    d[i][j - 1] + 1,
-                    d[i - 1][j - 1] + 1,
-                )
-
-    i, j = r_len, p_len
-    S = I = D = 0
-    while i > 0 or j > 0:
-        if i > 0 and j > 0 and ref_words[i - 1] == hyp_words[j - 1]:
-            i -= 1; j -= 1
-        elif i > 0 and j > 0 and d[i][j] == d[i - 1][j - 1] + 1:
-            S += 1; i -= 1; j -= 1
-        elif j > 0 and d[i][j] == d[i][j - 1] + 1:
-            I += 1; j -= 1
-        else:
-            D += 1; i -= 1
-
     score = (S + I + D) / r_len if r_len > 0 else None
     return S, I, D, score
 
 
-def _aggregate(pairs):
-    total_S = total_I = total_D = total_ref = 0
+def _aggregate(pairs, backend: str = "auto", detail: str = "full"):
+    """Aggregate ``(ref_units, hyp_units)`` pairs into a result dict.
+
+    A pair may be ``None``, meaning the sentence was not scored (see the
+    repetition filter in :func:`gemini_wer`). Such sentences count towards
+    ``num_sentences`` and ``num_skipped``, contribute nothing to the totals,
+    and appear as ``nan`` in ``per_utterance``.
+
+    ``detail='rates'`` computes distances only. The rates are identical to
+    ``'full'``; what it gives up is the split into substitutions, insertions
+    and deletions, and in exchange it can use the fast backend, which is around
+    a thousand times quicker.
+    """
+    if detail not in ("full", "rates"):
+        raise ValueError(f"unknown detail {detail!r}; expected 'full' or 'rates'")
+    want_ops = detail == "full"
+    backend = resolve_backend(backend, need_operations=want_ops)
+
+    total_S = total_I = total_D = total_edits = total_ref = 0
     per_utt = []
-    for ref_words, hyp_words in pairs:
-        S, I, D, score = _wer_from_word_lists(ref_words, hyp_words)
-        total_S += S
-        total_I += I
-        total_D += D
-        total_ref += len(ref_words)
+    per_sentence = []
+    scored = []
+    skipped = 0
+    for pair in pairs:
+        if pair is None:
+            skipped += 1
+            scored.append(float("nan"))
+            per_sentence.append(None)
+            continue
+        ref_words, hyp_words = pair
+        r_len = len(ref_words)
+        if want_ops:
+            S, I, D, score = _wer_from_word_lists(ref_words, hyp_words, backend=backend)
+            edits = S + I + D
+            total_S += S
+            total_I += I
+            total_D += D
+            sentence = {
+                "substitutions": S,
+                "insertions": I,
+                "deletions": D,
+                "edits": edits,
+                "reference_length": r_len,
+                "score": score,
+            }
+        else:
+            edits = distance(ref_words, hyp_words, backend=backend)
+            score = edits / r_len if r_len > 0 else None
+            sentence = {
+                "substitutions": None,
+                "insertions": None,
+                "deletions": None,
+                "edits": edits,
+                "reference_length": r_len,
+                "score": score,
+            }
+        total_edits += edits
+        total_ref += r_len
+        per_sentence.append(sentence)
+        scored.append(score if score is not None else float("nan"))
         if score is not None:
             per_utt.append(score)
-    micro = (total_S + total_I + total_D) / total_ref if total_ref > 0 else float("inf")
-    macro = float(np.mean(per_utt)) if per_utt else float("inf")
+    micro = total_edits / total_ref if total_ref > 0 else float("nan")
+    macro = float(np.mean(per_utt)) if per_utt else float("nan")
     return {
         "micro_wer": float(micro),
         "macro_wer": float(macro),
-        "substitutions": total_S,
-        "insertions": total_I,
-        "deletions": total_D,
-        "num_sentences": len(pairs),
+        "substitutions": total_S if want_ops else None,
+        "insertions": total_I if want_ops else None,
+        "deletions": total_D if want_ops else None,
+        "num_sentences": len(per_sentence),
+        "num_scored": len(per_utt),
+        "num_skipped": skipped,
+        "per_utterance": np.array(scored, dtype=float),
+        "per_sentence": per_sentence,
     }
+
+
+def _relabel(result: dict, unit: str) -> dict:
+    """Rename ``micro_wer``/``macro_wer`` for the metrics that are not WER."""
+    if unit == "wer":
+        return result
+    out = dict(result)
+    out["micro_" + unit] = out.pop("micro_wer")
+    out["macro_" + unit] = out.pop("macro_wer")
+    return out
 
 
 def _validate_inputs(predictions, references):
@@ -74,240 +148,320 @@ def _validate_inputs(predictions, references):
         predictions = [predictions]
     if isinstance(references, str):
         references = [references]
+    predictions = list(predictions)
+    references = list(references)
     if len(predictions) != len(references):
         raise ValueError(
-            f"predictions and references must have the same length "
-            f"(got {len(predictions)} and {len(references)})"
+            "predictions and references must have the same length "
+            "(got {} and {})".format(len(predictions), len(references))
         )
     return predictions, references
 
 
+def _apply_normalization(texts, normalize):
+    """``normalize`` may be False, True, or a dict of :func:`normalize` kwargs."""
+    if not normalize:
+        return texts
+    kwargs = normalize if isinstance(normalize, dict) else {}
+    return [_normalize(t, **kwargs) for t in texts]
+
+
+def _with_fallbacks(result: dict, before: dict) -> dict:
+    """Attach the number of segmentation fallbacks incurred by this call."""
+    after = fallback_counts()
+    result["num_segmentation_fallbacks"] = sum(after.values()) - sum(before.values())
+    return result
+
+
 # ---------------------------------------------------------------------------
-# Botok segmenter
+# Metrics over units the caller supplies
 # ---------------------------------------------------------------------------
 
-_botok_tokenizer = None
-
-
-def _get_botok_tokenizer():
-    global _botok_tokenizer
-    if _botok_tokenizer is None:
-        import botok
-        _botok_tokenizer = botok.WordTokenizer()
-    return _botok_tokenizer
-
-
-def _botok_segment(text):
-    tok = _get_botok_tokenizer()
-    tokens = tok.tokenize(text.strip())
-    return [t["text_cleaned"] for t in tokens]
-
-
-def word_segment(sentence, tokenizer=None):
-    """Segment a Tibetan sentence into words using botok.
+def score_segments(
+    prediction_segments,
+    reference_segments,
+    unit: str = "wer",
+    backend: str = "auto",
+    detail: str = "full",
+) -> dict:
+    """Score already-segmented text.
 
     Parameters
     ----------
-    sentence : str
-    tokenizer : optional
-        A botok-compatible tokenizer. Defaults to the shared lazy instance.
+    prediction_segments, reference_segments : sequence of sequence of str
+        Token lists, e.g. from :func:`tibetan_wer.segmentation.segment_all`.
+        An entry may be ``None`` to mark a sentence that could not be
+        segmented; it is reported as ``nan`` rather than scored.
+    unit : str
+        Label for the rate keys: ``"wer"`` gives ``micro_wer``/``macro_wer``,
+        ``"cer"`` gives ``micro_cer``/``macro_cer``, and so on.
+    backend, detail
+        See :func:`cer`.
 
-    Returns
-    -------
-    list of str
+    Notes
+    -----
+    Use this to segment once and score many systems against the same
+    segmentation -- worthwhile for the BERT and Gemini segmenters, where
+    segmentation dominates the cost of an evaluation.
     """
-    if tokenizer is not None:
-        tokens = tokenizer.tokenize(sentence.strip())
-        return [t["text_cleaned"] for t in tokens]
-    return _botok_segment(sentence)
+    preds, refs = _validate_inputs(prediction_segments, reference_segments)
+    pairs = [
+        None if (ref is None or pred is None) else (list(ref), list(pred))
+        for pred, ref in zip(preds, refs)
+    ]
+    return _relabel(_aggregate(pairs, backend=backend, detail=detail), unit)
 
 
-def wer(predictions, references):
-    """WER using botok word segmentation.
+def edit_operations(prediction, reference, level: str = "char", backend: str = "auto", **segment_kwargs):
+    """The individual edits between one prediction and one reference.
 
     Parameters
     ----------
-    predictions : list of str or str
-    references  : list of str or str
+    prediction, reference : str
+    level : {'char', 'syllable', 'botok', 'bert', 'gemini'}
+        Unit to align over. ``'char'`` is the CER unit, ``'syllable'`` the SER
+        unit, the rest the SWER units.
+    backend : {'auto', 'python', 'fast'}
+        See :func:`cer`. ``'auto'`` keeps the reference alignment here, since
+        which operations are reported is exactly what the backends can differ
+        on.
+    **segment_kwargs
+        Forwarded to the segmenter.
 
     Returns
     -------
-    dict with micro_wer, macro_wer, substitutions, insertions, deletions,
-    num_sentences.
+    list of :class:`tibetan_wer.alignment.EditOperation`
+        Each carries the operation (``"S"``, ``"I"`` or ``"D"``), the reference
+        and hypothesis units involved, and their positions -- enough to build
+        confusion tables, count edits falling on the tsek, or classify errors
+        by the character they land on.
+    """
+    if level == "char":
+        ref_units, hyp_units = list(reference), list(prediction)
+    elif level == "syllable":
+        ref_units, hyp_units = syllable_segment(reference), syllable_segment(prediction)
+    else:
+        ref_units, hyp_units = segment_all(
+            [reference, prediction], method=level, **segment_kwargs
+        )
+    return align(ref_units, hyp_units, backend=backend)
+
+
+# ---------------------------------------------------------------------------
+# CER
+# ---------------------------------------------------------------------------
+
+def cer(predictions, references, normalize=False, backend: str = "auto", detail: str = "full") -> dict:
+    """Character Error Rate.
+
+    Parameters
+    ----------
+    predictions, references : str or sequence of str
+    normalize : bool or dict
+        ``False`` (default) scores text as stored: no Unicode normalization, no
+        case folding, no punctuation stripping. ``True`` applies
+        :func:`tibetan_wer.normalization.normalize`; a dict passes keyword
+        arguments to it. CER is sensitive to these conventions, so state which
+        you used when reporting.
+    backend : {'auto', 'python', 'fast'}
+        Alignment implementation. ``'fast'`` needs ``rapidfuzz`` or
+        ``python-Levenshtein`` and returns identical rates but may split a
+        total differently between substitutions, insertions and deletions, so
+        ``'auto'`` uses it only where operation counts are not requested.
+    detail : {'full', 'rates'}
+        ``'rates'`` skips the operation counts, which lets the fast backend run
+        -- around a thousand times quicker on long lines, with identical rates.
+
+    Returns
+    -------
+    dict with ``micro_cer``, ``macro_cer``, ``substitutions``, ``insertions``,
+    ``deletions``, ``num_sentences``, ``num_scored``, ``num_skipped``,
+    ``per_utterance``, ``per_sentence``.
     """
     predictions, references = _validate_inputs(predictions, references)
-    pairs = [
-        (_botok_segment(ref), _botok_segment(pred))
-        for pred, ref in zip(predictions, references)
-    ]
-    return _aggregate(pairs)
-
-
-botok_wer = wer
+    predictions = _apply_normalization(predictions, normalize)
+    references = _apply_normalization(references, normalize)
+    pairs = [(list(ref), list(pred)) for pred, ref in zip(predictions, references)]
+    return _relabel(_aggregate(pairs, backend=backend, detail=detail), "cer")
 
 
 # ---------------------------------------------------------------------------
 # SER (tsek-split syllable error rate)
 # ---------------------------------------------------------------------------
 
-def ser(predictions, references):
-    """Syllable Error Rate using tsek (་) as the syllable boundary.
+def ser(predictions, references, normalize=False, backend: str = "auto", detail: str = "full") -> dict:
+    """Syllable Error Rate, using the tsek (་) as the syllable boundary.
 
-    Parameters
-    ----------
-    predictions : list of str or str
-    references  : list of str or str
+    Parameters as :func:`cer`.
 
     Returns
     -------
-    dict with micro_ser, macro_ser, substitutions, insertions, deletions,
-    num_sentences.
+    dict with ``micro_ser``, ``macro_ser``, and the shared keys documented in
+    :func:`cer`.
     """
     predictions, references = _validate_inputs(predictions, references)
+    predictions = _apply_normalization(predictions, normalize)
+    references = _apply_normalization(references, normalize)
     pairs = [
-        ([s for s in ref.split(TSEK) if s], [s for s in pred.split(TSEK) if s])
+        (syllable_segment(ref), syllable_segment(pred))
         for pred, ref in zip(predictions, references)
     ]
-    result = _aggregate(pairs)
-    return {
-        "micro_ser": result["micro_wer"],
-        "macro_ser": result["macro_wer"],
-        "substitutions": result["substitutions"],
-        "insertions": result["insertions"],
-        "deletions": result["deletions"],
-        "num_sentences": result["num_sentences"],
-    }
+    return _relabel(_aggregate(pairs, backend=backend, detail=detail), "ser")
 
 
 # ---------------------------------------------------------------------------
-# BERT-UPOS segmenter
+# SWER variants
 # ---------------------------------------------------------------------------
 
-_bert_nlp = None
+def wer(
+    predictions,
+    references,
+    normalize=False,
+    cache: dict | None = None,
+    backend: str = "auto",
+    detail: str = "full",
+    on_error: str = "fallback",
+) -> dict:
+    """BoTok-SWER: WER after botok word segmentation.
 
+    ``cache`` is an optional ``{text: tokens}`` map, reused and updated in place
+    across calls. ``on_error='raise'`` propagates a segmenter failure instead of
+    falling back to a syllable split for that string; either way the result
+    carries ``num_segmentation_fallbacks``.
 
-def _get_bert_nlp(device=None):
-    global _bert_nlp
-    if _bert_nlp is None:
-        from transformers import pipeline as hf_pipeline
-        import torch
-        if device is None:
-            device = 0 if torch.cuda.is_available() else -1
-        _bert_nlp = hf_pipeline(
-            "token-classification",
-            "KoichiYasuoka/tibetan-bert-base-upos",
-            trust_remote_code=True,
-            aggregation_strategy="simple",
-            device=device,
-        )
-    return _bert_nlp
-
-
-def _bert_segment(text, nlp):
-    if not text or not text.strip():
-        return []
-    try:
-        result = nlp(text)
-        words = [e["word"].strip() for e in result if e["word"].strip()]
-        return words if words else [s for s in text.split(TSEK) if s]
-    except Exception:
-        return [s for s in text.split(TSEK) if s]
-
-
-def bert_wer(predictions, references, device=None):
-    """WER using KoichiYasuoka/tibetan-bert-base-upos segmentation.
-
-    Parameters
-    ----------
-    predictions : list of str or str
-    references  : list of str or str
-    device      : int or None
-        Passed to the transformers pipeline. None auto-detects CUDA.
-
-    Returns
-    -------
-    dict with micro_wer, macro_wer, substitutions, insertions, deletions,
-    num_sentences.
+    Other parameters as :func:`cer`.
     """
     predictions, references = _validate_inputs(predictions, references)
-    nlp = _get_bert_nlp(device)
-    unique = set(predictions) | set(references)
-    cache = {text: _bert_segment(text, nlp) for text in unique}
-    pairs = [
-        (cache[ref], cache[pred])
-        for pred, ref in zip(predictions, references)
-    ]
-    return _aggregate(pairs)
-
-
-# ---------------------------------------------------------------------------
-# Gemini segmenter
-# ---------------------------------------------------------------------------
-
-def _gemini_segment(client, text, model, max_retries=3):
-    prompt = (
-        "Segment the following Tibetan text into words. "
-        "Output ONLY the segmented text with words separated by a pipe character (|). "
-        "Keep the original Tibetan characters and tsek marks (་) intact within each word. "
-        "Do not add any explanation or punctuation beyond the pipe separators.\n\n"
-        f"Text: {text}"
+    predictions = _apply_normalization(predictions, normalize)
+    references = _apply_normalization(references, normalize)
+    before = fallback_counts()
+    segments = segment_all(
+        list(references) + list(predictions), method="botok", cache=cache, on_error=on_error
     )
-    for attempt in range(max_retries):
-        try:
-            response = client.models.generate_content(
-                model=model,
-                contents=prompt,
-                config={"temperature": 0.0},
-            )
-            return response.text.strip()
-        except Exception:
-            if attempt < max_retries - 1:
-                time.sleep(2 ** attempt)
-            else:
-                raise
+    n = len(references)
+    result = score_segments(segments[n:], segments[:n], unit="wer", backend=backend, detail=detail)
+    return _with_fallbacks(result, before)
 
 
-def _parse_gemini_words(raw):
-    if "|" in raw:
-        return [w.strip() for w in raw.split("|") if w.strip()]
-    return raw.strip().split()
+botok_wer = wer
 
 
-def gemini_wer(predictions, references, api_key=None, model="gemini-2.5-flash-lite"):
-    """WER using Gemini word segmentation.
+def bert_wer(
+    predictions,
+    references,
+    device=None,
+    normalize=False,
+    cache: dict | None = None,
+    backend: str = "auto",
+    detail: str = "full",
+    max_syllables: int | None = None,
+    on_error: str = "fallback",
+) -> dict:
+    """BERT-SWER: WER after tibetan-bert-base-upos segmentation.
+
+    ``device`` is passed to the transformers pipeline; ``None`` auto-detects
+    CUDA. Distinct strings are segmented once each. ``max_syllables`` windows
+    long lines to stay inside the model's 512-token limit -- see
+    :func:`tibetan_wer.segmentation.bert_segment`.
+
+    Other parameters as :func:`wer`.
+    """
+    predictions, references = _validate_inputs(predictions, references)
+    predictions = _apply_normalization(predictions, normalize)
+    references = _apply_normalization(references, normalize)
+    before = fallback_counts()
+    segments = segment_all(
+        list(references) + list(predictions),
+        method="bert",
+        cache=cache,
+        device=device,
+        max_syllables=max_syllables,
+        on_error=on_error,
+    )
+    n = len(references)
+    result = score_segments(segments[n:], segments[:n], unit="wer", backend=backend, detail=detail)
+    return _with_fallbacks(result, before)
+
+
+def gemini_wer(
+    predictions,
+    references,
+    api_key=None,
+    model: str = GEMINI_MODEL,
+    max_repetition_ratio: float | None = 10.0,
+    max_output_tokens: int | None = None,
+    normalize=False,
+    cache: dict | None = None,
+    backend: str = "auto",
+    detail: str = "full",
+    workers: int = 1,
+    on_error: str = "raise",
+) -> dict:
+    """Gem-SWER: WER after Gemini word segmentation.
 
     Parameters
     ----------
-    predictions : list of str or str
-    references  : list of str or str
-    api_key     : str or None
-        Gemini API key. Defaults to the GEMINI_API_KEY environment variable.
-    model       : str
-        Gemini model name.
+    predictions, references : list of str or str
+    api_key : str or None
+        Defaults to the ``GEMINI_API_KEY`` environment variable.
+    model : str
+    max_repetition_ratio : float or None
+        Sentences whose prediction or reference repeats characters more than
+        this many times over (length / distinct characters) are not sent to the
+        API and are reported as ``nan``, since such strings -- the output of a
+        collapsed model -- provoke request timeouts. ``None`` disables the
+        filter and restores pre-1.2 behaviour. Check ``num_skipped``: a rate
+        computed over the remainder is not comparable with one computed over
+        all sentences, and a system is degraded, not undefined, on the
+        sentences that were dropped.
+    max_output_tokens : int or None
+        Caps each response, bounding the cost of a repetition loop.
+    cache : dict or None
+        ``{text: tokens}`` map, reused and updated in place. Persist it to
+        avoid paying for the same segmentation twice.
+    workers : int
+        Concurrent API calls. The work is network latency, so this scales
+        nearly linearly; the per-call pause is dropped above 1.
+    on_error : {'raise', 'fallback'}
+        What to do with a string the API will not segment after its retries.
+
+    Other parameters as :func:`cer`.
 
     Returns
     -------
-    dict with micro_wer, macro_wer, substitutions, insertions, deletions,
-    num_sentences.
+    dict with the keys documented in :func:`cer`, plus ``num_skipped`` and
+    ``num_segmentation_fallbacks``.
     """
     predictions, references = _validate_inputs(predictions, references)
-    from google import genai
-
-    if api_key is None:
-        api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        raise ValueError("Gemini API key required: pass api_key= or set GEMINI_API_KEY")
-
-    client = genai.Client(api_key=api_key)
-    unique = set(predictions) | set(references)
-    cache = {}
-    for text in unique:
-        raw = _gemini_segment(client, text, model)
-        cache[text] = _parse_gemini_words(raw)
-        time.sleep(0.2)
-
-    pairs = [
-        (cache[ref], cache[pred])
+    predictions = _apply_normalization(predictions, normalize)
+    references = _apply_normalization(references, normalize)
+    threshold = max_repetition_ratio
+    skip = [
+        threshold is not None
+        and (is_degenerate(ref, threshold) or is_degenerate(pred, threshold))
         for pred, ref in zip(predictions, references)
     ]
-    return _aggregate(pairs)
+    cache = {} if cache is None else cache
+    before = fallback_counts()
+    wanted = [
+        text
+        for keep, pred, ref in zip(skip, predictions, references)
+        if not keep
+        for text in (pred, ref)
+    ]
+    segment_all(
+        wanted,
+        method="gemini",
+        cache=cache,
+        workers=workers,
+        api_key=api_key,
+        model=model,
+        max_output_tokens=max_output_tokens,
+        on_error=on_error,
+    )
+    pred_segments = [None if s else cache[p] for s, p in zip(skip, predictions)]
+    ref_segments = [None if s else cache[r] for s, r in zip(skip, references)]
+    result = score_segments(
+        pred_segments, ref_segments, unit="wer", backend=backend, detail=detail
+    )
+    return _with_fallbacks(result, before)

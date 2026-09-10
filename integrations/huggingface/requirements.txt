@@ -1,0 +1,1 @@
+tibetan-wer>=1.2.0
