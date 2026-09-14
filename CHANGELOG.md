@@ -32,7 +32,7 @@ Rates published with the paper are unchanged: `wer`, `botok_wer`, `ser` and `ber
 
 ### Fixed
 
-- `segment_all(method="gemini", workers>1)` built an API client even when the caller passed one in, so it demanded a key it did not need. Found while testing; never released.
+- `segment_all` built the segmenter even when the caller supplied one: an API client under `method="gemini", workers>1`, and the BERT pipeline under `method="bert"`, so `nlp=` still required torch to be installed. Both found by tests; never released.
 
 ## 1.1.1
 

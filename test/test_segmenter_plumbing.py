@@ -207,6 +207,35 @@ def test_gemini_wer_reuses_a_supplied_cache():
     assert set(cache) == {HYP, REF}
 
 
+def test_a_supplied_pipeline_is_never_replaced_by_a_loaded_one():
+    """Loading the real model imports torch, which an injected pipeline must not need."""
+    def explode(device=None):
+        raise AssertionError("the model was loaded despite nlp= being supplied")
+
+    real = seg._get_bert_nlp
+    seg._get_bert_nlp = explode
+    try:
+        nlp = FakePipeline()
+        assert segment_all(["ཀ་ཁ"], method="bert", nlp=nlp) == [["ཀཁ"]]
+        assert bert_wer([HYP], [REF], nlp=nlp)["micro_wer"] >= 0
+    finally:
+        seg._get_bert_nlp = real
+
+
+def test_a_supplied_client_is_never_replaced_by_a_built_one():
+    def explode(api_key=None):
+        raise AssertionError("a client was built despite client= being supplied")
+
+    real = seg._get_gemini_client
+    seg._get_gemini_client = explode
+    try:
+        client = FakeGemini()
+        assert segment_all(["ཀ་ཁ"], method="gemini", workers=2, client=client) == [["ཀ", "ཁ"]]
+        assert gemini_wer([HYP], [REF], client=client, workers=2)["micro_wer"] >= 0
+    finally:
+        seg._get_gemini_client = real
+
+
 # --- batching --------------------------------------------------------------
 
 def test_segment_all_runs_workers_concurrently_and_keeps_order():

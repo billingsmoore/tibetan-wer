@@ -342,7 +342,11 @@ def segment_all(
     texts = list(texts)
     cache = {} if cache is None else cache
     if method == "bert":
-        kwargs.setdefault("nlp", _get_bert_nlp(kwargs.pop("device", None)))
+        # load the model only if the caller did not supply a pipeline;
+        # setdefault would load it either way, which needs torch installed
+        device = kwargs.pop("device", None)
+        if kwargs.get("nlp") is None:
+            kwargs["nlp"] = _get_bert_nlp(device)
     pending = []
     seen = set()
     for text in texts:
