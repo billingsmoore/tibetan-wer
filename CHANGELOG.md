@@ -20,7 +20,8 @@ Rates published with the paper are unchanged: `wer`, `botok_wer`, `ser` and `ber
 - Segmentation fallbacks are counted: `fallback_counts`, `reset_fallback_counts`, and `num_segmentation_fallbacks` in the metric results. `on_error="raise"` opts out of falling back.
 - `max_syllables` on `bert_segment` / `bert_wer`, windowing long lines to stay inside the model's 512-token limit.
 - A `tibetan-wer` command-line entry point, and an `evaluate` metric module under `integrations/huggingface/`.
-- A test suite (`test/test_metrics.py`), CI across Python 3.9-3.13, and `py.typed`.
+- `nlp=` on `bert_wer` and `client=` on `gemini_wer`, to reuse a loaded pipeline or a built API client across calls.
+- A test suite (97 tests over `test/`, 92% line coverage), CI across Python 3.9-3.13 run with and without the optional fast backend, and `py.typed`.
 
 ### Changed
 
@@ -28,6 +29,10 @@ Rates published with the paper are unchanged: `wer`, `botok_wer`, `ser` and `ber
 - `gemini_wer` filters degenerate strings by default (`max_repetition_ratio=10.0`); pass `None` for 1.1.1 behaviour. Filtered sentences are `nan` and counted in `num_skipped`.
 - `word_segment` falls back to a syllable split on a string that makes botok raise, instead of propagating; the fallback is counted.
 - Minimum Python is 3.9.
+
+### Fixed
+
+- `segment_all(method="gemini", workers>1)` built an API client even when the caller passed one in, so it demanded a key it did not need. Found while testing; never released.
 
 ## 1.1.1
 

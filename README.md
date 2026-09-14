@@ -311,8 +311,8 @@ Everything importable from `tibetan_wer`:
 | `cer(predictions, references, normalize=False, backend='auto', detail='full')` | character error rate |
 | `ser(...)` | syllable error rate, tsek-delimited |
 | `wer(..., cache=None, on_error='fallback')` / `botok_wer` | BoTok-SWER |
-| `bert_wer(..., device=None, max_syllables=None)` | BERT-SWER |
-| `gemini_wer(..., api_key=None, max_repetition_ratio=10.0, max_output_tokens=None, workers=1)` | Gem-SWER |
+| `bert_wer(..., device=None, max_syllables=None, nlp=None)` | BERT-SWER; `nlp=` reuses a loaded pipeline |
+| `gemini_wer(..., api_key=None, max_repetition_ratio=10.0, max_output_tokens=None, workers=1, client=None)` | Gem-SWER; `client=` reuses a built client |
 | `score_segments(prediction_segments, reference_segments, unit='wer')` | score units you segmented yourself |
 | **Statistics** | |
 | `bootstrap_ci(scores, n_iterations=10000, percentiles=(2.5, 97.5), seed=42, statistic='macro')` | `(point, lo, hi)` |
@@ -359,8 +359,18 @@ Everything importable from `tibetan_wer`:
 
 ```bash
 pip install "tibetan-wer[dev]"
-pytest test/test_metrics.py        # or: python test/test_metrics.py
+pytest test/                       # or run any file directly: python test/test_cli.py
 ```
+
+Three files, 97 tests, 92% line coverage:
+
+| File | |
+|---|---|
+| `test/test_metrics.py` | metrics, alignment, backends, normalization, statistics, diagnostics, and a cross-check of `score_segments` against `jiwer` on space-delimited text |
+| `test/test_segmenter_plumbing.py` | the BERT and Gemini paths — caching, windowing, the repetition filter, fallback accounting, concurrency — with stand-ins passed through `nlp=` and `client=` |
+| `test/test_cli.py` | the command line: text and JSON reports, every `--metric` branch, the vocabulary options, stdin, exit statuses |
+
+The two segmenters that need a model download or a paid endpoint are never called for real, and CI runs the suite twice, with and without the optional fast backend.
 
 ## Changes
 

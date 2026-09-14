@@ -356,6 +356,7 @@ def bert_wer(
     detail: str = "full",
     max_syllables: int | None = None,
     on_error: str = "fallback",
+    nlp=None,
 ) -> dict:
     """BERT-SWER: WER after tibetan-bert-base-upos segmentation.
 
@@ -377,6 +378,7 @@ def bert_wer(
         device=device,
         max_syllables=max_syllables,
         on_error=on_error,
+        **({"nlp": nlp} if nlp is not None else {}),
     )
     n = len(references)
     result = score_segments(segments[n:], segments[:n], unit="wer", backend=backend, detail=detail)
@@ -396,6 +398,7 @@ def gemini_wer(
     detail: str = "full",
     workers: int = 1,
     on_error: str = "raise",
+    client=None,
 ) -> dict:
     """Gem-SWER: WER after Gemini word segmentation.
 
@@ -424,6 +427,9 @@ def gemini_wer(
         nearly linearly; the per-call pause is dropped above 1.
     on_error : {'raise', 'fallback'}
         What to do with a string the API will not segment after its retries.
+    client : optional
+        An already-built ``google.genai`` client, used instead of constructing
+        one from ``api_key`` (and usable as an injection point under test).
 
     Other parameters as :func:`cer`.
 
@@ -458,6 +464,7 @@ def gemini_wer(
         model=model,
         max_output_tokens=max_output_tokens,
         on_error=on_error,
+        **({"client": client} if client is not None else {}),
     )
     pred_segments = [None if s else cache[p] for s, p in zip(skip, predictions)]
     ref_segments = [None if s else cache[r] for s, r in zip(skip, references)]

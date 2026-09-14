@@ -518,6 +518,140 @@ def test_cli_rejects_mismatched_files():
         assert main([str(base / "a.txt"), str(base / "refs.txt")]) == 2
 
 
+
+# --- remaining branches ----------------------------------------------------
+
+def test_normalize_options_are_all_reachable():
+    from tibetan_wer import normalize, normalize_all
+    assert normalize("  ཀ་ཁ  ", strip=False) == "  ཀ་ཁ  "
+    assert normalize("ཀ༈ཁ", fold_sbrul_shad=False) == "ཀ༈ཁ"
+    assert normalize("ཀ་ཁ", form=None) == "ཀ་ཁ"
+    assert normalize_all(["ཀ༌ཁ", "ཀ༈ཁ"]) == ["ཀ་ཁ", "ཀ།ཁ"]
+
+
+def test_bootstrap_rejects_an_unknown_statistic():
+    try:
+        bootstrap_ci(cer(["ab"], ["ab"]), statistic="median")
+    except ValueError:
+        return
+    raise AssertionError("expected ValueError")
+
+
+def test_bootstrap_micro_on_nothing_scorable_is_nan():
+    r = cer(["abc"], [""])
+    assert all(np.isnan(v) for v in bootstrap_ci(r, n_iterations=10, statistic="micro"))
+
+
+def test_compare_methods_can_be_selected_separately():
+    refs = ["abcdefgh"] * 20
+    a, b = cer(["abcdefgh"] * 20, refs), cer(["abcdefgX"] * 20, refs)
+    only_boot = compare(a, b, n_iterations=200, method="bootstrap")
+    assert only_boot["p_bootstrap"] is not None and only_boot["p_permutation"] is None
+    only_perm = compare(a, b, n_iterations=200, method="permutation")
+    assert only_perm["ci"] is None and only_perm["p_permutation"] is not None
+    micro_perm = compare(a, b, n_iterations=200, method="permutation", statistic="micro")
+    assert micro_perm["p_permutation"] < 0.05
+
+
+def test_compare_rejects_unknown_method_and_statistic():
+    a = cer(["ab"], ["ab"])
+    for bad in (lambda: compare(a, a, method="vibes"),
+                lambda: compare(a, a, statistic="median", n_iterations=10)):
+        try:
+            bad()
+        except ValueError:
+            continue
+        raise AssertionError("expected ValueError")
+
+
+def test_compare_refuses_when_nothing_is_paired():
+    try:
+        compare(cer(["ab"], [""]), cer(["cd"], [""]))
+    except ValueError:
+        return
+    raise AssertionError("expected ValueError")
+
+
+def test_backend_helpers():
+    from tibetan_wer.alignment import available_backends, backend_library, resolve_backend
+    assert "python" in available_backends()
+    assert resolve_backend("auto", need_operations=True) == "python"
+    assert (backend_library() is None) == ("fast" not in available_backends())
+    try:
+        resolve_backend("quantum")
+    except ValueError:
+        return
+    raise AssertionError("expected ValueError")
+
+
+def test_fast_backend_reports_every_operation_kind():
+    if not _fast_available():
+        print("  (skipped: no fast backend installed)")
+        return
+    ins = align(list("ac"), list("abc"), backend="fast")
+    assert [o.op for o in ins] == ["I"] and ins[0].ref is None and ins[0].hyp == "b"
+    dele = align(list("abc"), list("ac"), backend="fast")
+    assert [o.op for o in dele] == ["D"] and dele[0].hyp is None
+    sub = align(list("abc"), list("axc"), backend="fast")
+    assert [o.op for o in sub] == ["S"] and (sub[0].ref, sub[0].hyp) == ("b", "x")
+    assert edit_counts(list("abc"), list("axc"), backend="fast") == (1, 0, 0)
+
+
+def test_requesting_an_absent_fast_backend_raises_importerror():
+    from tibetan_wer.alignment import resolve_backend
+    if _fast_available():
+        print("  (skipped: the fast backend is installed here; CI covers the other case)")
+        return
+    try:
+        resolve_backend("fast")
+    except ImportError as exc:
+        assert "rapidfuzz" in str(exc)
+        return
+    raise AssertionError("expected ImportError")
+
+
+def test_concentration_of_nothing_is_nan():
+    from tibetan_wer import concentration
+    empty = concentration([])
+    assert empty["num_sentences"] == 0
+    assert all(np.isnan(empty[k]) for k in ("zero_error_share", "p90", "worst_decile_share", "gini"))
+
+
+def test_profile_at_word_level_uses_the_segmenter():
+    from tibetan_wer import error_profile
+    if not _botok_available():
+        print("  (skipped: botok not installed)")
+        return
+    p = error_profile([HYP], [REF], level="botok")
+    assert p["level"] == "botok" and p["operations"]["total"] > 0
+    assert "boundary_edits" not in p           # character-level only
+
+
+def test_score_segments_labels_the_unit_it_is_told_to():
+    r = score_segments([["a"]], [["b"]], unit="cer")
+    assert "micro_cer" in r and "micro_wer" not in r
+
+
+def test_wer_reuses_a_supplied_cache():
+    if not _botok_available():
+        print("  (skipped: botok not installed)")
+        return
+    from tibetan_wer import wer
+    cache = {}
+    wer([HYP], [REF], cache=cache)
+    assert set(cache) == {HYP, REF}
+    wer([HYP], [REF], cache=cache)             # served from the cache
+    assert set(cache) == {HYP, REF}
+
+
+def test_edit_operations_at_word_level():
+    if not _botok_available():
+        print("  (skipped: botok not installed)")
+        return
+    ops = edit_operations(HYP, REF, level="botok")
+    assert ops and all(o.op in ("S", "I", "D") for o in ops)
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):

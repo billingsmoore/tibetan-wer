@@ -351,7 +351,10 @@ def segment_all(
             pending.append(text)
     if workers > 1 and pending:
         if method == "gemini":
-            kwargs.setdefault("client", _get_gemini_client(kwargs.get("api_key")))
+            # build the shared client only if the caller did not supply one;
+            # setdefault would construct it either way, which needs a key
+            if kwargs.get("client") is None:
+                kwargs["client"] = _get_gemini_client(kwargs.get("api_key"))
             kwargs.setdefault("pause", 0.0)
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=workers) as pool:
