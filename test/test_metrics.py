@@ -116,9 +116,52 @@ def test_ser_argument_order_swaps_insertions_and_deletions():
     assert forward["substitutions"] == reversed_["substitutions"]
 
 
-def test_syllable_segment_ignores_tsek_bstar():
+def test_syllable_segment_splits_on_tsek_and_tsek_bstar():
     assert syllable_segment("ཀ་ཁ") == ["ཀ", "ཁ"]
-    assert syllable_segment("ཀ༌ཁ") == ["ཀ༌ཁ"]
+    assert syllable_segment("ཀ༌ཁ") == ["ཀ", "ཁ"]
+
+
+def test_syllable_segment_splits_at_shad_and_space():
+    # each of these was one unit under a tsek-only split
+    assert syllable_segment("པས། ལུགས") == ["པས", "ལུགས"]
+    assert syllable_segment("གིས། ཁྱོད") == ["གིས", "ཁྱོད"]
+    assert syllable_segment("གནད།  གངས") == ["གནད", "གངས"]
+    assert syllable_segment("ཏེ༴  དེ") == ["ཏེ", "དེ"]
+    assert syllable_segment("ཀ ཁ") == ["ཀ", "ཁ"]
+
+
+def test_syllable_segment_keeps_visarga_with_its_syllable():
+    assert syllable_segment("ཛཿ  ཀི") == ["ཛཿ", "ཀི"]
+
+
+def test_syllable_segment_shad_directly_after_syllable():
+    assert syllable_segment("བཀྲ་ཤིས།") == ["བཀྲ", "ཤིས"]
+    assert syllable_segment("ཤིས།") == ["ཤིས"]
+
+
+def test_syllable_segment_drops_every_delimiter():
+    for mark in "༄༅༆༇༈༉༊་༌།༎༏༐༑༒༓༔༴༺༻༼༽࿐࿑࿒࿓࿔࿙࿚":
+        assert syllable_segment(f"ཀ{mark}ཁ") == ["ཀ", "ཁ"], hex(ord(mark))
+    assert syllable_segment("༄༅། །བཀྲ་ཤིས། ") == ["བཀྲ", "ཤིས"]
+    assert syllable_segment("ཀ༑ ༼ཁ༽") == ["ཀ", "ཁ"]
+
+
+def test_syllable_segment_never_yields_empty_units():
+    assert syllable_segment("་་ཀ་་ཁ་") == ["ཀ", "ཁ"]
+    assert syllable_segment(" །ཀ། ། ") == ["ཀ"]
+    assert syllable_segment("") == []
+    assert syllable_segment("། ་ ༎") == []
+
+
+def test_ser_counts_a_shad_bounded_syllable_on_its_own():
+    # one wrong syllable is one error out of two, not the whole fused unit
+    r = ser(["པས། ལུགཟ"], ["པས། ལུགས"])
+    assert r["substitutions"] == 1 and r["micro_ser"] == 0.5
+
+
+def test_ser_ignores_punctuation():
+    assert ser(["བཀྲ་ཤིས"], ["བཀྲ་ཤིས།"])["micro_ser"] == 0.0
+    assert ser(["ཀ ཁ"], ["ཀ་ཁ"])["micro_ser"] == 0.0
 
 
 # --- per-sentence output ---------------------------------------------------
@@ -331,11 +374,10 @@ def test_normalize_folds_variant_punctuation():
     assert normalize("ཀ༌ཁ", fold_tsek_bstar=False) == "ཀ༌ཁ"
 
 
-def test_normalize_changes_ser_by_creating_a_boundary():
-    plain = ser(["ཀ༌ཁ་ག"], ["ཀ་ཁ་ག"])
-    folded = ser(["ཀ༌ཁ་ག"], ["ཀ་ཁ་ག"], normalize=True)
-    assert plain["micro_ser"] > 0
-    assert folded["micro_ser"] == 0.0
+def test_tsek_bstar_needs_no_folding_for_ser():
+    assert ser(["ཀ༌ཁ་ག"], ["ཀ་ཁ་ག"])["micro_ser"] == 0.0
+    assert cer(["ཀ༌ཁ་ག"], ["ཀ་ཁ་ག"])["micro_cer"] > 0
+    assert cer(["ཀ༌ཁ་ག"], ["ཀ་ཁ་ག"], normalize=True)["micro_cer"] == 0.0
 
 
 def test_normalize_accepts_kwargs():

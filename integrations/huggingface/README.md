@@ -24,7 +24,7 @@ metric.compute(predictions=preds, references=refs, metric="ser")
 # {'micro': 0.142, 'macro': 0.151, 'substitutions': 812, ...}
 ```
 
-`metric=` selects the unit: `"cer"` (codepoints), `"ser"` (tsek-delimited syllables), `"wer"`/`"botok"`, `"bert"`, `"gemini"` (the three SWER segmenters). `normalize=True` applies NFC and folds tsek bstar and sbrul shad. `detail="rates"` skips the edit-operation counts and runs far faster on long lines, with identical rates. Extra keyword arguments reach the underlying function — `device=` for `"bert"`, `api_key=` and `workers=` for `"gemini"`.
+`metric=` selects the unit: `"cer"` (codepoints), `"ser"` (syllables, bounded by tsek, whitespace or shad), `"wer"`/`"botok"`, `"bert"`, `"gemini"` (the three SWER segmenters). `normalize=True` applies NFC and folds tsek bstar and sbrul shad. `detail="rates"` skips the edit-operation counts and runs far faster on long lines, with identical rates. Extra keyword arguments reach the underlying function — `device=` for `"bert"`, `api_key=` and `workers=` for `"gemini"`.
 
 ## What it returns
 

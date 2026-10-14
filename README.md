@@ -22,7 +22,7 @@ pip install "tibetan-wer[gemini]"        # + Gemini segmentation
 | Function | Metric | Unit | Extra dependency |
 |---|---|---|---|
 | `cer` | CER | Unicode codepoint | *(none)* |
-| `ser` | SER | tsek (་) delimited syllable | *(none)* |
+| `ser` | SER | syllable, bounded by tsek, whitespace or shad ([below](#syllables)) | *(none)* |
 | `wer` / `botok_wer` | BoTok-SWER | [botok](https://github.com/Esukhia/botok) morphological tokenizer | *(none)* |
 | `bert_wer` | BERT-SWER | [KoichiYasuoka/tibetan-bert-base-upos](https://huggingface.co/KoichiYasuoka/tibetan-bert-base-upos) | `tibetan-wer[bert]` |
 | `gemini_wer` | Gem-SWER | Gemini 2.5 Flash Lite | `tibetan-wer[gemini]` |
@@ -83,7 +83,35 @@ cer(predictions, references, normalize={'fold_sbrul_shad': False})
 normalize('ཀ༌ཁ')      # 'ཀ་ཁ'
 ```
 
-Folding tsek bstar matters for SER in particular, which splits on the tsek only.
+Folding changes CER only. SER treats tsek and tsek bstar alike, and drops punctuation, so neither folding changes it.
+
+### Syllables
+
+`ser`, `syllable_segment` and every `level='syllable'` diagnostic share one rule. A syllable is a maximal run of characters that are not delimiters, and the delimiters are:
+
+| Codepoints | |
+|---|---|
+| whitespace | any Unicode whitespace |
+| U+0F04–U+0F0A | yig mgo head marks ༄ ༅ ༆ ༇, sbrul shad ༈, ༉ ༊ |
+| U+0F0B, U+0F0C | tsek ་ and tsek bstar ༌ |
+| U+0F0D–U+0F12 | the shads ། ༎ ༏ ༐ ༑ ༒ |
+| U+0F13, U+0F14 | ༓, gter tsheg ༔ |
+| U+0F34 | bsdus rtags ༴ |
+| U+0F3A–U+0F3D | brackets ༺ ༻ ༼ ༽ |
+| U+0FD0–U+0FD4, U+0FD9–U+0FDA | further head marks, nyis tsheg ࿒, mchan rtags |
+
+A syllable that ends a clause carries a shad and no tsek, and one before a space carries neither, so all of these are boundaries. Tsek bstar is a tsek that forbids a line break there; it still separates syllables.
+
+Delimiters are dropped, not scored: SER counts syllables only, and punctuation errors show up in CER. Runs of delimiters, and delimiters at either end, produce no empty units. Combining signs, the visarga ཿ among them, belong to their syllable, and so do ༀ, ༁–༃, ༸ and digits.
+
+```python
+syllable_segment("༄༅། །བཀྲ་ཤིས། ")   # ['བཀྲ', 'ཤིས']
+syllable_segment("པས། ལུགས")          # ['པས', 'ལུགས']
+syllable_segment("ཛཿ  ཀི")            # ['ཛཿ', 'ཀི']
+syllable_segment("ཀ༌ཁ་ག")             # ['ཀ', 'ཁ', 'ག']
+```
+
+The delimiter class is exported as `SYLLABLE_DELIMITERS`. Before 2.0.0, SER split on the tsek alone; see the [changelog](CHANGELOG.md) for what that changed and how to reproduce older figures.
 
 ### Confidence intervals
 
@@ -309,7 +337,7 @@ Everything importable from `tibetan_wer`:
 |---|---|
 | **Metrics** | |
 | `cer(predictions, references, normalize=False, backend='auto', detail='full')` | character error rate |
-| `ser(...)` | syllable error rate, tsek-delimited |
+| `ser(...)` | syllable error rate |
 | `wer(..., cache=None, on_error='fallback')` / `botok_wer` | BoTok-SWER |
 | `bert_wer(..., device=None, max_syllables=None, nlp=None)` | BERT-SWER; `nlp=` reuses a loaded pipeline |
 | `gemini_wer(..., api_key=None, max_repetition_ratio=10.0, max_output_tokens=None, workers=1, client=None)` | Gem-SWER; `client=` reuses a built client |
@@ -331,7 +359,7 @@ Everything importable from `tibetan_wer`:
 | `EditOperation` | `(op, ref, hyp, ref_index, hyp_index)`, `op` in `S`/`I`/`D` |
 | `available_backends()` | `['fast', 'python']` or `['python']` |
 | **Segmentation** | |
-| `syllable_segment(text)` | split on the tsek |
+| `syllable_segment(text)` | split into syllables, dropping tsek, whitespace and shad |
 | `word_segment(sentence, tokenizer=None, on_error='fallback')` / `botok_segment` | botok |
 | `bert_segment(text, device=None, max_syllables=None, on_error='fallback')` | UPOS classifier |
 | `gemini_segment(text, api_key=None, model=..., max_output_tokens=None, on_error='raise')` | Gemini |
@@ -362,7 +390,7 @@ pip install "tibetan-wer[dev]"
 pytest test/                       # or run any file directly: python test/test_cli.py
 ```
 
-Three files, 97 tests, 92% line coverage:
+Three files, 107 tests:
 
 | File | |
 |---|---|
@@ -374,7 +402,7 @@ The two segmenters that need a model download or a paid endpoint are never calle
 
 ## Changes
 
-See [CHANGELOG.md](CHANGELOG.md). Rates published with the paper are unchanged in 1.2.0.
+See [CHANGELOG.md](CHANGELOG.md). **2.0.0 changes SER** on any text containing whitespace, shad or other punctuation; BoTok-, BERT- and Gem-SWER and CER are unchanged.
 
 ## Citation
 
