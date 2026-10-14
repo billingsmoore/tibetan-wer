@@ -4,7 +4,7 @@ Metrics       cer, ser, wer / botok_wer, bert_wer, gemini_wer, score_segments
 Statistics    bootstrap_ci, compare, cis_overlap, significance_matrix
 Diagnostics   error_profile, concentration, gini, edit_operations
 Alignment     align, edit_counts, distance, EditOperation, available_backends
-Segmentation  syllable_segment, word_segment, bert_segment, gemini_segment,
+Segmentation  syllable_segment, SYLLABLE_DELIMITERS, word_segment, bert_segment, gemini_segment,
               segment_all, fallback_counts, repetition_ratio, is_degenerate
 Normalization normalize, normalize_all
 
@@ -24,6 +24,7 @@ from .metrics import (
 from .normalization import normalize, normalize_all
 from .profile import concentration, error_profile, gini
 from .segmentation import (
+    SYLLABLE_DELIMITERS,
     bert_segment,
     fallback_counts,
     gemini_segment,
@@ -36,7 +37,7 @@ from .segmentation import (
 )
 from .stats import bootstrap_ci, cis_overlap, compare, significance_matrix
 
-__version__ = "1.2.0"
+__version__ = "2.0.0"
 
 __all__ = [
     # metrics
@@ -65,6 +66,7 @@ __all__ = [
     "available_backends",
     # segmentation
     "syllable_segment",
+    "SYLLABLE_DELIMITERS",
     "word_segment",
     "bert_segment",
     "gemini_segment",

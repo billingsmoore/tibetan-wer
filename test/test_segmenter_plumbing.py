@@ -126,6 +126,14 @@ def test_max_syllables_windows_long_lines():
     assert "".join(windowed) == "".join(seg.syllable_segment(text))
 
 
+def test_max_syllables_windows_keep_the_original_punctuation():
+    nlp = FakePipeline()
+    text = "ཀ་ཁ། ག་ང། ཅ་ཆ།"
+    seg.bert_segment(text, nlp=nlp, max_syllables=2)
+    assert nlp.calls == ["ཀ་ཁ། ", "ག་ང། ", "ཅ་ཆ།"]
+    assert "".join(nlp.calls) == text
+
+
 def test_max_syllables_leaves_short_lines_alone():
     nlp = FakePipeline()
     seg.bert_segment("ཀ་ཁ་", nlp=nlp, max_syllables=100)

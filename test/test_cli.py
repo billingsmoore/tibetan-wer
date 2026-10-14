@@ -157,8 +157,9 @@ def test_every_metric_branch_dispatches():
 def test_normalize_and_backend_and_detail_flags_take_effect():
     def check(f):
         (f.dir / "variant.txt").write_text("ཀ༌ཁ་ག\nང་ཅ་ཆ\nཇ་ཉ་ཏ", encoding="utf-8")
-        plain = json.loads(_run([str(f.dir / "variant.txt"), f.refs, "--json"])[1])
-        folded = json.loads(_run([str(f.dir / "variant.txt"), f.refs, "--normalize", "--json"])[1])
+        variant = str(f.dir / "variant.txt")
+        plain = json.loads(_run([variant, f.refs, "--metric", "cer", "--json"])[1])
+        folded = json.loads(_run([variant, f.refs, "--metric", "cer", "--normalize", "--json"])[1])
         assert plain["micro"] > 0 and folded["micro"] == 0.0
         rates = json.loads(_run([f.good, f.refs, "--detail", "rates", "--json"])[1])
         assert "substitutions" not in rates          # not computed in this mode

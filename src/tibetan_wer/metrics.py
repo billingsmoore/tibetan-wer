@@ -1,7 +1,7 @@
 """Error rates for Tibetan text: CER, SER, and the three SWER variants.
 
 Every metric here is the same Levenshtein rate over a different unit: characters
-(CER), tsek-delimited syllables (SER), or words produced by one of the
+(CER), syllables (SER), or words produced by one of the
 segmenters in :mod:`tibetan_wer.segmentation` (BoTok-SWER, BERT-SWER,
 Gem-SWER). Each returns micro and macro rates, corpus edit-operation totals, and
 the per-sentence scores and per-sentence edit counts behind them, which is what
@@ -286,11 +286,15 @@ def cer(predictions, references, normalize=False, backend: str = "auto", detail:
 
 
 # ---------------------------------------------------------------------------
-# SER (tsek-split syllable error rate)
+# SER (syllable error rate)
 # ---------------------------------------------------------------------------
 
 def ser(predictions, references, normalize=False, backend: str = "auto", detail: str = "full") -> dict:
-    """Syllable Error Rate, using the tsek (་) as the syllable boundary.
+    """Syllable Error Rate over :func:`syllable_segment` units.
+
+    Syllables end at a tsek, a tsek bstar, whitespace, a shad, or another
+    syllable-closing mark; the marks themselves are dropped, so punctuation
+    errors do not count toward SER (they count toward CER).
 
     Parameters as :func:`cer`.
 

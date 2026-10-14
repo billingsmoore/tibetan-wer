@@ -39,8 +39,8 @@ def normalize(
         rather than precomposed characters, so this changes less than it does
         in many scripts, but it does settle vowel-sign ordering.
     fold_tsek_bstar : bool
-        Rewrite tsek bstar (U+0F0C) as tsek (U+0F0B). Affects SER, which splits
-        on the latter only.
+        Rewrite tsek bstar (U+0F0C) as tsek (U+0F0B). Affects CER only: SER
+        treats both as a syllable boundary.
     fold_sbrul_shad : bool
         Rewrite sbrul shad (U+0F08) as shad (U+0F0D).
     strip : bool

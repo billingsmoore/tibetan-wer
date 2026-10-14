@@ -21,11 +21,13 @@ from __future__ import annotations
 
 import collections
 import os
+import re
 import time
 from typing import Iterable
 
 __all__ = [
     "TSEK",
+    "SYLLABLE_DELIMITERS",
     "GEMINI_MODEL",
     "BERT_UPOS_MODEL",
     "GEMINI_SEGMENT_PROMPT",
@@ -42,6 +44,16 @@ __all__ = [
 ]
 
 TSEK = "་"  # ་ intersyllabic tsek
+
+# Characters that end a syllable, besides whitespace. Dropped, never scored.
+SYLLABLE_DELIMITERS = (
+    "\u0F04-\u0F14"  # yig mgo head marks, sbrul shad, tsek, tsek bstar, the shads, gter tsheg
+    "\u0F34"          # bsdus rtags
+    "\u0F3A-\u0F3D"  # gug rtags and ang khang brackets
+    "\u0FD0-\u0FD4"  # further head marks, nyis tsheg
+    "\u0FD9\u0FDA"    # mchan rtags
+)
+_SYLLABLE = re.compile(r"[^\s" + SYLLABLE_DELIMITERS + "]+")
 
 GEMINI_MODEL = "gemini-2.5-flash-lite"
 BERT_UPOS_MODEL = "KoichiYasuoka/tibetan-bert-base-upos"
@@ -113,12 +125,31 @@ def is_degenerate(text: str, threshold: float = 10.0) -> bool:
 # ---------------------------------------------------------------------------
 
 def syllable_segment(text: str) -> list:
-    """Split on the tsek (U+0F0B), discarding empty segments.
+    """Split into syllables, dropping the delimiters between them.
 
-    Tsek bstar (U+0F0C) is deliberately not treated as a boundary; fold it with
-    :func:`tibetan_wer.normalization.normalize` first if you want it to be.
+    A syllable is a maximal run of characters that are not delimiters. The
+    delimiters are whitespace, the tsek (U+0F0B), the tsek bstar (U+0F0C), the
+    shads (U+0F0D-U+0F12), and the other marks that close or open a syllable
+    (:data:`SYLLABLE_DELIMITERS`). A syllable that ends at a shad or a space
+    carries no tsek, so the shad and the space are boundaries too.
+
+    Delimiters are not units: punctuation errors do not count toward SER, and
+    show up in CER instead. Runs of delimiters, and delimiters at either end,
+    produce no empty units. Combining signs such as the visarga (U+0F7F) belong
+    to their syllable.
     """
-    return [s for s in text.split(TSEK) if s]
+    return _SYLLABLE.findall(text)
+
+
+def _syllable_windows(text: str, size: int) -> list:
+    """Cut ``text`` into pieces holding at most ``size`` syllables each.
+
+    Pieces are slices of the original string, cut just before a syllable, so
+    the punctuation and spacing a segmenter sees are those of the input.
+    """
+    starts = [m.start() for m in _SYLLABLE.finditer(text)]
+    cuts = starts[size::size]
+    return [text[a:b] for a, b in zip([0] + cuts, cuts + [len(text)])]
 
 
 # ---------------------------------------------------------------------------
@@ -215,11 +246,10 @@ def bert_segment(
         return []
     pipeline = nlp if nlp is not None else _get_bert_nlp(device)
     if max_syllables:
-        syllables = syllable_segment(text)
-        if len(syllables) > max_syllables:
+        windows = _syllable_windows(text, max_syllables)
+        if len(windows) > 1:
             out = []
-            for start in range(0, len(syllables), max_syllables):
-                window = TSEK.join(syllables[start:start + max_syllables]) + TSEK
+            for window in windows:
                 out.extend(bert_segment(window, nlp=pipeline, on_error=on_error))
             return out
     try:
